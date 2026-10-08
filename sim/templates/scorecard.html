@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apex Hydraulics — target scorecard</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #eef2f6; color: #17293d; }
+  header { padding: 10px 16px; background: #10314f; color: #fff; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { font-size: 13px; color: #c7d6e6; }
+  header .meta b { color: #fff; }
+  nav a { color: #c7d6e6; font-size: 13px; text-decoration: none; margin-right: 12px; padding-bottom: 2px; }
+  nav a.current { color: #fff; border-bottom: 2px solid #64b5f6; }
+  main { padding: 12px 16px; max-width: 1060px; }
+  section.card { background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 10px 14px 14px; margin-bottom: 14px; }
+  section.card h2 { font-size: 14px; margin: 4px 0 2px; }
+  section.card p.sub { font-size: 12px; color: #546e7a; margin: 0 0 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 10px; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #e4ebf2; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: #546e7a; font-weight: 600; }
+  thead th { position: sticky; top: 0; z-index: 2; background: #f4f7fa; box-shadow: 0 1px 0 #c3ceda; }
+  .banner { background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; font-size: 14px; }
+  .banner.good { border-color: #4caf50; background: #f0f7f0; }
+  .banner.caution { border-color: #ef6c00; background: #fdf3e7; }
+  .banner.bad { border-color: #c62828; background: #fdecea; }
+  .chip { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 10px; text-transform: uppercase; }
+  .chip.green { background: #e3f2e4; color: #2e7d32; }
+  .chip.amber { background: #fdf3e7; color: #b35900; }
+  .chip.red { background: #fdecea; color: #c62828; }
+  .verdict { font-size: 13px; line-height: 1.6; color: #17293d; white-space: pre-wrap; }
+  form.inline { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; font-size: 12.5px; }
+  form.inline label { display: block; font-size: 11px; color: #546e7a; margin-bottom: 2px; }
+  form.inline input, form.inline select { padding: 4px 6px; border: 1px solid #b9c6d3; border-radius: 5px; font-size: 12.5px; width: 110px; }
+  form.inline input.wide { width: 150px; }
+  button { padding: 6px 16px; border: 0; border-radius: 6px; background: #10314f; color: #fff; font-size: 13px; cursor: pointer; }
+  button:disabled { background: #6b7f95; cursor: wait; }
+  .note { font-size: 11.5px; color: #546e7a; }
+  footer { padding: 6px 16px 18px; font-size: 11.5px; color: #5c7288; }
+  #status { font-size: 12.5px; color: #546e7a; margin-left: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Apex Hydraulics — target scorecard</h1>
+  <nav>
+    <a href="/">canvas</a>
+    <a href="/dashboard">dashboard</a>
+    <a href="/optimize">optimize</a>
+    <a href="/scorecard" class="current">scorecard</a>
+  </nav>
+  {% if case %}
+  <span class="meta">case: <b>{{ case }}</b></span>
+  {% else %}
+  <span class="meta">no case loaded — run <code>sim load &lt;case-folder&gt;</code> first</span>
+  {% endif %}
+</header>
+
+{% if case %}
+<main>
+  <section class="card">
+    <h2>Run the proof: baseline vs optimized</h2>
+    <p class="sub">
+      Four runs, one demand seed — baseline (current network) vs optimized
+      (pooled MEIO policy + engine), at base and growth demand.
+    </p>
+    <form class="inline" id="form">
+      <div><label for="days">run length (days)</label>
+        <input id="days" type="number" value="90" min="1" max="365"></div>
+      <div><label for="seed">demand seed</label>
+        <input id="seed" type="number" value="42" min="1" max="999999"></div>
+      <div><label for="policy">optimized policy</label>
+        <select id="policy">
+          <option value="pooled">pooled</option>
+          <option value="dispersed">dispersed</option>
+        </select></div>
+      {% for label in capex_labels %}
+      <div><label for="capex{{ loop.index0 }}">{{ label }} ($)</label>
+        <input id="capex{{ loop.index0 }}" class="wide" type="number"
+               value="{{ capex_defaults[loop.index0] }}" min="0" step="10000"></div>
+      {% endfor %}
+      <button id="run" type="submit">Run comparison</button>
+      <span id="status"></span>
+    </form>
+  </section>
+
+  <div id="results"></div>
+</main>
+
+<script>
+const chipClass = { green: "green", amber: "amber", red: "red" };
+function chip(status) {
+  return `<span class="chip ${chipClass[status] || "amber"}">${status}</span>`;
+}
+const money = v => "$" + Math.round(v).toLocaleString("en-US");
+const pct = v => (v === null || v === undefined) ? "n/a" : v + "%";
+
+document.getElementById("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const labels = {{ capex_labels | tojson }};
+  const capex = labels.map((_, i) =>
+    document.getElementById("capex" + i).value).join(",");
+  const params = new URLSearchParams({
+    days: document.getElementById("days").value,
+    seed: document.getElementById("seed").value,
+    policy: document.getElementById("policy").value,
+    capex: capex,
+  });
+  const btn = document.getElementById("run");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+  status.textContent = "running four simulations…";
+  document.getElementById("results").innerHTML = "";
+  try {
+    const r = await fetch("/compare?" + params, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) {
+      status.textContent = "error: " + (data.error || r.status);
+      return;
+    }
+    status.textContent = "";
+    render(data);
+  } catch (err) {
+    status.textContent = "error: " + err;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function render(sc) {
+  const s = sc.scenarios;
+  const overallClass =
+    sc.overall_status === "green" ? "good"
+    : sc.overall_status === "red" ? "bad" : "caution";
+  const headline =
+    sc.overall_status === "green"
+      ? "All business targets pass"
+      : sc.overall_status === "red"
+      ? "Some business targets fail"
+      : "Targets pass with warnings";
+  let html = `<div class="banner ${overallClass}"><b>${headline}</b> —
+    case targets scored over a ${sc.parameters.days}-day seeded simulation
+    (seed ${sc.parameters.seed}). ${chip(sc.overall_status)}</div>`;
+
+  html += `<section class="card"><h2>KPI scorecard — target vs achieved</h2>
+    <p class="sub">Baseline = today's network (no policy engine); optimized =
+    MEIO ${sc.parameters.policy} policy + policy engine; same demand seed
+    in every run.</p>
+    <table><thead><tr><th>KPI</th><th>target</th><th>baseline</th>
+    <th>optimized</th><th>status</th></tr></thead><tbody>`;
+  for (const row of sc.kpis) {
+    let base = "-", opt = "-";
+    if (row.unit === "$") {
+      base = row.baseline === null ? "-" : money(row.baseline);
+      opt = money(row.optimized);
+    } else if (row.unit === "$/yr") {
+      base = row.baseline === null ? "-" : money(row.baseline) + "/yr";
+      opt = money(row.optimized) + "/yr"
+        + (row.change_pct !== null && row.change_pct !== undefined
+           ? " (" + (row.change_pct > 0 ? "+" : "") + row.change_pct + "%)"
+           : "");
+    } else if (row.unit === "%") {
+      base = pct(row.baseline); opt = pct(row.optimized);
+    } else {
+      base = row.baseline === null ? "-" : row.baseline;
+      opt = row.optimized;
+    }
+    html += `<tr><td>${row.label}</td><td>${row.target}</td>
+      <td>${base}</td><td><b>${opt}</b></td>
+      <td>${chip(row.status)}</td></tr>`;
+  }
+  html += "</tbody></table></section>";
+
+  for (const [heading, pair] of [
+    ["Scenario comparison — base demand (1.00x)", ["baseline", "optimized"]],
+    ["Scenario comparison — growth demand (" + sc.parameters.growth_scale + "x)",
+     ["baseline_growth", "optimized_growth"]],
+  ]) {
+    html += `<section class="card"><h2>${heading}</h2><table>
+      <thead><tr><th>metric</th><th>baseline</th><th>optimized</th></tr></thead><tbody>`;
+    const rows = [
+      ["orders", "orders", v => v.toLocaleString("en-US")],
+      ["filled orders", "filled", v => v.toLocaleString("en-US")],
+      ["orders late", "late", v => v.toLocaleString("en-US")],
+      ["units shipped late / lost", "late_units", v => v.toLocaleString("en-US")],
+      ["tier-1 service", "tier1_service_pct", pct],
+      ["avg inventory value", "avg_inventory_value", money],
+      ["holding cost / yr", "holding_annual", v => money(v) + "/yr"],
+      ["expedite freight / yr", "expedite_annual", v => money(v) + "/yr"],
+      ["total cost / yr", "total_annual", v => money(v) + "/yr"],
+    ];
+    for (const [label, metric, fmt] of rows) {
+      html += `<tr><td>${label}</td>
+        <td>${fmt(s[pair[0]][metric])}</td>
+        <td><b>${fmt(s[pair[1]][metric])}</b></td></tr>`;
+    }
+    html += "</tbody></table></section>";
+  }
+
+  html += `<section class="card"><h2>Capacity — peak units on hand (growth run)</h2><table>
+    <thead><tr><th>node</th><th>type</th><th>cap</th><th>peak</th>
+    <th>utilization</th><th>status</th></tr></thead><tbody>`;
+  for (const [code, c] of Object.entries(s.optimized_growth.capacity)) {
+    html += `<tr><td>${code}</td><td>${c.node_type}</td>
+      <td>${c.capacity_units.toLocaleString("en-US")}</td>
+      <td>${c.peak_units.toLocaleString("en-US")}</td>
+      <td>${c.peak_utilization_pct === null ? "n/a" : c.peak_utilization_pct + "%"}</td>
+      <td>${c.breached ? chip("red") : chip("green")}</td></tr>`;
+  }
+  html += "</tbody></table></section>";
+
+  html += `<section class="card"><h2>Capex ledger</h2><table>
+    <thead><tr><th>item</th><th>amount</th></tr></thead><tbody>`;
+  for (const item of sc.capex.items) {
+    html += `<tr><td>${item.label}</td><td>${money(item.amount)}</td></tr>`;
+  }
+  html += `<tr><td><b>total (ceiling ${money(sc.capex.ceiling)})</b></td>
+    <td><b>${money(sc.capex.total)}</b> ${chip(sc.capex.status)}</td></tr>`;
+  html += "</tbody></table></section>";
+
+  html += `<section class="card"><h2>Verdict — what the redesign buys and what it costs</h2>
+    <div class="verdict">${sc.verdict}</div>
+    <p class="note">full report with the event log summary:
+    <code>${sc.report_path}</code></p></section>`;
+
+  document.getElementById("results").innerHTML = html;
+}
+</script>
+{% endif %}
+
+<footer>
+  POST /compare runs the pair and returns this scorecard as JSON; the CLI
+  equivalent is <code>python -m sim compare --days 90 --seed 42</code>, which
+  writes the same report to <code>runs/compare-…/report.md</code>.
+</footer>
+</body>
+</html>

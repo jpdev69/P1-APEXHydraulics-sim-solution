@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apex Hydraulics — network canvas</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #eef2f6; color: #17293d; }
+  header { padding: 10px 16px; background: #10314f; color: #fff; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { font-size: 13px; color: #c7d6e6; }
+  header .meta b { color: #fff; }
+  .nav a { color: #c7d6e6; font-size: 13px; text-decoration: none; margin-right: 12px; padding-bottom: 2px; }
+  .nav a.current { color: #fff; border-bottom: 2px solid #64b5f6; }
+  #controls, #demo, #demand { padding: 8px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  #controls { background: #dde6ef; }
+  #demand { background: #d8e5f1; border-bottom: 1px solid #b9c6d3; }
+  #demo { background: #d3e0ec; border-bottom: 1px solid #b9c6d3; }
+  #demand input[type=range] { width: 180px; }
+  #demand-label { font-size: 12.5px; color: #33506b; }
+  .ok { color: #2e7d32; } .warn { color: #ef6c00; } .bad { color: #c62828; }
+  #orders-panel { margin: 4px 0 14px; background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 12px 16px; }
+  #orders-panel h2 { font-size: 14px; margin: 0 0 8px; }
+  #order-stats { font-size: 12.5px; margin-bottom: 8px; }
+  #orders-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  #orders-table th, #orders-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e4ebf2; }
+  #orders-table th { color: #546e7a; font-weight: 600; }
+  #policy-feed { margin: 4px 0 14px; background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 12px 16px; }
+  #policy-feed h2 { font-size: 14px; margin: 0 0 8px; }
+  #policy-feed ul { list-style: none; margin: 0; padding: 0; font-size: 12px; color: #33465a; }
+  #policy-feed li { padding: 3px 0; border-bottom: 1px dashed #e4ebf2; }
+  #policy-feed li b { color: #1565c0; }
+  #policy-feed .ev-expedite b { color: #c62828; }
+  #policy-feed .ev-replenish_blocked b { color: #ef6c00; }
+  #policy-feed .ev-replenish_blocked { color: #7a5b00; }
+  button { padding: 5px 12px; border-radius: 6px; border: 1px solid #8fa5ba; background: #fff; cursor: pointer; font-size: 13px; }
+  button:hover:not(:disabled) { background: #eaf2fb; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: #1565c0; border-color: #0d47a1; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #1976d2; }
+  select, input[type=number] { padding: 3px 6px; border-radius: 6px; border: 1px solid #8fa5ba; font-size: 13px; }
+  main { padding: 12px 16px; }
+  svg#canvas { width: 100%; max-width: 1000px; background: #fff; border: 1px solid #c3ceda; border-radius: 10px; }
+.lane { stroke: #b9c6d3; stroke-width: 3; fill: none; }
+.lane.inbound { stroke-dasharray: 6 5; stroke: #9db4cc; }
+.lane.inbound.to-hub { display: none; }
+#canvas.engine-off .lane.transfer { display: none; }
+#canvas.engine-off .lane.inbound.to-hub { display: inline; }
+#canvas.engine-off .lane.inbound.no-self-replenish { display: none; }
+#canvas.engine-off .node.idle-when-off { opacity: 0.45; transform: translate(110px, 520px); }
+  .supplier-box { fill: #eef2f6; stroke: #90a4ae; stroke-width: 1.5; rx: 8; }
+  .supplier-text { font-size: 11px; font-weight: 600; fill: #455a64; text-anchor: middle; }
+  .supplier-sub { font-size: 9px; fill: #78909c; text-anchor: middle; }
+  .node .box { fill: #ffffff; stroke: #90a4ae; stroke-width: 2; }
+  .node.is-central .box { fill: #eaf2fb; stroke: #1565c0; stroke-width: 3; }
+  .node.below .box { stroke: #ef6c00; stroke-width: 3; }
+  .node.over .box { stroke: #c62828; stroke-width: 3; }
+  .node .code { font-size: 13px; font-weight: 700; fill: #17293d; text-anchor: middle; }
+  .node .name { font-size: 9.5px; fill: #546e7a; text-anchor: middle; }
+  .node .units { font-size: 11px; fill: #263b4f; text-anchor: middle; }
+  .node .utilbg { fill: #dfe7ee; }
+  .node .utilfg { fill: #4caf50; }
+  .node .utilfg.warn { fill: #ef6c00; }
+  .node .badge { font-size: 10px; font-weight: 700; fill: #2e7d32; text-anchor: middle; }
+  .node.below .badge { fill: #ef6c00; }
+  .node.over .badge { fill: #c62828; }
+  .marker { fill: #1e88e5; stroke: #fff; stroke-width: 1.5; }
+  .marker.expedited { fill: #ef5350; }
+  .marker-label { font-size: 9px; fill: #0d47a1; text-anchor: middle; font-weight: 600; }
+  footer { padding: 6px 16px 18px; font-size: 11.5px; color: #5c7288; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Apex Hydraulics — network canvas</h1>
+  <nav class="nav">
+    <a href="/" class="current">canvas</a>
+    <a href="/dashboard">dashboard</a>
+    <a href="/optimize">optimize</a>
+    <a href="/scorecard">scorecard</a>
+  </nav>
+  {% if case %}
+  <span class="meta">case: <b>{{ case }}</b></span>
+  <span class="meta" id="day">day <b>{{ day }}</b></span>
+  <span class="meta" id="totals"></span>
+  <span class="meta" id="policy-badge"></span>
+  {% else %}
+  <span class="meta">no case loaded — run <code>sim load &lt;case-folder&gt;</code> first</span>
+  {% endif %}
+</header>
+
+<section id="controls">
+  <button id="play" class="primary">Play</button>
+  <button id="pause" disabled>Pause</button>
+  <button id="step">Step +1 day</button>
+  <button id="run30">Run 30 days</button>
+  <button id="reset">Reset</button>
+  <button id="apply-policy" title="Write the pooled plan's numbers into the run and switch on the replenishment engine">Apply pooled policy</button>
+  <label>speed
+    <select id="speed">
+      <option value="1500">1.5 s/day</option>
+      <option value="700" selected>0.7 s/day</option>
+      <option value="300">0.3 s/day</option>
+    </select>
+  </label>
+</section>
+
+{% if case %}
+<section id="demand">
+  <label for="slider">demand scale
+    <input type="range" id="slider" min="0.5" max="1.5" step="0.05" value="1.15">
+  </label>
+  <span id="demand-label">drag to arm the demand engine (seed 42)</span>
+</section>
+{% endif %}
+
+{% if case %}
+<section id="demo">
+  <span>Demo shipment — move stock between two warehouses by hand, then watch the replenishment engine react:</span>
+  <select id="origin">{% for n in nodes %}<option value="{{ n.code }}" {% if spokes and n.code == spokes[0].code %}selected{% endif %}>{{ n.code }}</option>{% endfor %}</select>
+  <span>→</span>
+  <select id="destination">{% for n in nodes %}<option value="{{ n.code }}" {% if n.code == central %}selected{% endif %}>{{ n.code }}</option>{% endfor %}</select>
+  <select id="item">{% for i in items %}<option value="{{ i.item_code }}">{{ i.item_code }} — {{ i.item_name }}</option>{% endfor %}</select>
+  <label>qty <input id="qty" type="number" value="10" min="1" style="width:64px"></label>
+  <label>days <input id="days" type="number" value="3" min="1" style="width:56px"></label>
+  <button id="send">Send</button>
+</section>
+{% endif %}
+
+<main>
+<svg id="canvas" class="{% if not policy_engine %}engine-off{% endif %}" viewBox="0 0 920 600" xmlns="http://www.w3.org/2000/svg">
+  {% if case %}
+  <line class="lane inbound{% if not central_has_planning %} no-self-replenish{% endif %}" x1="{{ supplier_arrow.x1 }}" y1="{{ supplier_arrow.y1 }}" x2="{{ supplier_arrow.x2 }}" y2="{{ supplier_arrow.y2 }}"/>
+  {% for l in supplier_lanes %}
+  <path class="lane inbound to-hub" fill="none" data-hub="{{ l.hub }}" data-qx="{{ l.qx }}" data-qy="{{ l.qy }}" d="{{ l.d }}"/>
+  {% endfor %}
+  {% for s in spokes %}
+  <line class="lane transfer" x1="{{ central_pos.x }}" y1="{{ central_pos.y }}" x2="{{ s.x }}" y2="{{ s.y }}"/>
+  {% endfor %}
+  <g class="supplier">
+    <rect class="supplier-box" x="20" y="60" width="150" height="46" rx="8"/>
+    <text class="supplier-text" x="95" y="80">Suppliers ({{ supplier_count }})</text>
+    <text class="supplier-sub" x="95" y="96">raw-material inbound</text>
+  </g>
+  {% for n in nodes %}
+  <g class="node{% if n.code == central %} is-central{% if not central_has_planning %} idle-when-off{% endif %}{% endif %}" id="node-{{ n.code }}" transform="translate({{ n.x }}, {{ n.y }})">
+    <title>{{ n.name }} — serves {{ lane_stats.get(n.code, {}).get('customers', 0) }} customers, avg {{ lane_stats.get(n.code, {}).get('avg_transit_days', 0) }} days transit · capacity {{ n.capacity_units }} units</title>
+    <rect class="box" x="-100" y="-52" width="200" height="104" rx="12"/>
+    <text class="code" y="-30">{{ n.code }}</text>
+    <text class="name" y="-16">{{ n.name }}</text>
+    <text class="units" id="units-{{ n.code }}" y="4">— units</text>
+    <rect class="utilbg" x="-80" y="14" width="160" height="9" rx="4"/>
+    <rect class="utilfg" id="util-{{ n.code }}" x="-80" y="14" width="0" height="9" rx="4"/>
+    <text class="badge" id="badge-{{ n.code }}" y="46">…</text>
+  </g>
+  {% endfor %}
+  <g id="markers"></g>
+  {% endif %}
+</svg>
+
+{% if case %}
+<section id="orders-panel">
+  <h2>Order queue</h2>
+  <div id="order-stats">no demand yet — drag the demand slider to arm it</div>
+  <table id="orders-table">
+    <thead>
+      <tr><th>order</th><th>customer</th><th>item</th><th>qty</th><th>hub</th><th>waiting</th><th>status</th></tr>
+    </thead>
+    <tbody id="orders-body"></tbody>
+  </table>
+</section>
+
+<section id="policy-feed">
+  <h2>Replenishment log</h2>
+  <ul id="policy-list"><li>no replenishment events yet — press Play</li></ul>
+</section>
+{% endif %}
+</main>
+
+<footer>
+  OK = all SKUs at/above reorder point · BELOW = amber, at least one SKU below its
+  reorder point · OVER CAP = red, node above its storage cap. Blue markers are
+  in-transit shipments (hover for ETA); the dashed arrow is supplier inbound
+  to the central plant.
+</footer>
+
+<script>
+let layout = null;
+let timer = null;
+let sliderTouched = false;
+let lastSt = null;
+const $ = (id) => document.getElementById(id);
+
+async function post(url) {
+  const r = await fetch(url, { method: "POST" });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    alert(body.error || ("request failed: " + r.status));
+    return null;
+  }
+  return r.json();
+}
+
+async function refresh() {
+  const r = await fetch("/state");
+  if (!r.ok) return;
+  render(await r.json());
+}
+
+function fmt(n) { return n.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+
+function monthlyAt(st, scale) {
+  const d = st.demand || {};
+  const per = d.monthly_by_hub || {};
+  const total = Object.values(per).reduce((a, b) => a + b, 0);
+  const current = d.scale || 1.15;
+  const base = current > 0 ? total / current : 0;
+  return Math.round(base * scale);
+}
+
+function renderDemand(st) {
+  const d = st.demand || {};
+  if (!sliderTouched) {
+    $("slider").value = d.scale != null ? d.scale : 1.15;
+  }
+  if (d.armed) {
+    $("demand-label").innerHTML =
+      "×<b>" + (d.scale != null ? d.scale : 1.15).toFixed(2) + "</b>" +
+      " · ~" + fmt(monthlyAt(st, d.scale || 1.15)) + " units/month" +
+      " · demand armed (seed " + st.meta.seed + ")";
+  } else {
+    $("demand-label").textContent =
+      "drag to arm the demand engine (seed 42) · ~" +
+      fmt(monthlyAt(st, d.scale || 1.15)) + " units/month at current scale";
+  }
+}
+
+function renderOrders(st) {
+  const orders = st.orders || [];
+  let filled = 0, pending = 0, late = 0;
+  const open = [];
+  for (const o of orders) {
+    if (o.status === "FULFILLED") filled++;
+    else if (o.status === "PENDING") pending++;
+    else late++;
+    if (o.status !== "FULFILLED") open.push(o);
+  }
+  if (!orders.length) {
+    $("order-stats").textContent = "no customer orders yet — drag the demand slider to switch them on";
+    $("orders-body").innerHTML = "";
+    return;
+  }
+  $("order-stats").innerHTML =
+    fmt(orders.length) + " orders · <b class='ok'>" + fmt(filled) + "</b> shipped" +
+    " · <b class='warn'>" + fmt(pending) + "</b> waiting" +
+    " · <b class='bad'>" + fmt(late) + "</b> too late";
+  const body = $("orders-body");
+  body.innerHTML = "";
+  for (const o of open.slice(0, 12)) {
+    const tr = document.createElement("tr");
+    const cls = o.status === "LATE" ? "bad" : "warn";
+    const statusText = o.status === "PENDING" ? "waiting" : "too late";
+    tr.innerHTML =
+      "<td>" + o.order_id + "</td>" +
+      "<td>" + o.customer_id + "</td>" +
+      "<td>" + o.item_code + "</td>" +
+      "<td>" + o.qty + "</td>" +
+      "<td>" + (o.hub_code || "") + "</td>" +
+      "<td>" + o.days_pending + "d</td>" +
+      "<td class='" + cls + "'>" + statusText + "</td>";
+    body.appendChild(tr);
+  }
+}
+
+function renderPolicyFeed(st) {
+  const list = $("policy-list");
+  const types = {transfer_created: 1, po_created: 1, expedite: 1, replenish_blocked: 1};
+  const feed = (st.events || []).filter((e) => types[e.type]).slice(-8).reverse();
+  if (!feed.length) {
+    list.innerHTML = "<li>no replenishment events yet — press Play</li>";
+    return;
+  }
+  list.innerHTML = "";
+  for (const e of feed) {
+    const li = document.createElement("li");
+    li.className = "ev-" + e.type;
+    if (e.type === "transfer_created") {
+      li.innerHTML = "<b>day " + e.day + "</b> · replenishment sent " + e.origin + " → " +
+        e.destination + " · " + e.item_code + " ×" + e.qty + " (arrives day " + e.eta_day + ")";
+    } else if (e.type === "po_created") {
+      const late = e.late_days ? " <span class='bad'>+" + e.late_days + "d late</span>" : " on time";
+      li.innerHTML = "<b>day " + e.day + "</b> · supplier order " + e.supplier_id + " → " +
+        e.destination + " · " + e.item_code + " ×" + e.qty + ", arrives day " + e.eta_day + " (" + late + ")";
+    } else if (e.type === "replenish_blocked") {
+      const eta = e.inbound_eta_day
+        ? "supplier delivery due day " + e.inbound_eta_day
+        : "no supplier order on its way yet";
+      const why = e.reason === "central_dry"
+        ? "the plant has none to send (" + eta + ")"
+        : "no free storage space at the destination";
+      li.innerHTML = "<b>day " + e.day + "</b> · <b>replenish blocked</b> — " + e.hub + " / " +
+        e.item_code + " is below its reorder point " + e.reorder_point + ", but " + why;
+    } else {
+      li.innerHTML = "<b>day " + e.day + "</b> · <b class='bad'>rush shipment</b> " + e.origin + " → " +
+        e.destination + " · " + e.item_code + " ×" + e.qty + " at " + e.premium + "× freight cost (a hub was about to run out)";
+    }
+    list.appendChild(li);
+  }
+}
+
+function render(st) {
+  lastSt = st;
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  $("day").innerHTML = "day <b>" + st.meta.day + "</b>";
+  $("policy-badge").innerHTML = st.meta.policy_engine
+    ? "Currently running: <b>MEIO-pooled policy</b> — replenishment engine <b>ON</b>. To turn it off: <b>Disable engine</b>."
+    : (st.meta.applied_policy === "dispersed"
+      ? "Currently running: <b>MEIO-dispersed policy</b> — every warehouse keeps its own right-sized buffer, replenishment engine <b>OFF</b>. To run the redesign: <b>Apply pooled policy</b> → <b>Play</b>."
+      : "Currently running: <b>the case's own reorder levels</b> — replenishment engine <b>OFF</b>. To run the redesign: <b>Apply pooled policy</b> → <b>Play</b>.");
+  const applyBtn = $("apply-policy");
+  applyBtn.textContent = st.meta.policy_engine
+    ? "Disable engine"
+    : "Apply pooled policy";
+  applyBtn.title = st.meta.policy_engine
+    ? "Turn off the replenishment engine and restore the case's own reorder levels"
+    : "Write the pooled plan's numbers into the run and switch on the replenishment engine";
+  $("canvas").classList.toggle("engine-off", !st.meta.policy_engine);
+  let totalUnits = 0, totalValue = 0;
+  for (const n of st.nodes) {
+    const inv = st.inventory[n.code] || {};
+    let units = 0, value = 0;
+    for (const p of Object.values(inv)) { units += p.qty; value += p.value_usd; }
+    totalUnits += units; totalValue += value;
+    const node = $("node-" + n.code);
+    if (!node) continue;
+    const util = n.capacity_units ? units / n.capacity_units : 0;
+    node.classList.toggle("below", st.node_health[n.code] === "BELOW");
+    node.classList.toggle("over", units > n.capacity_units);
+    $("units-" + n.code).textContent = fmt(units) + " / " + fmt(n.capacity_units) + " units";
+    const bar = $("util-" + n.code);
+    bar.setAttribute("width", Math.min(160, 160 * util).toFixed(1));
+    bar.classList.toggle("warn", util > 0.8);
+    let badge;
+    if (units > n.capacity_units) badge = "OVER CAP";
+    else if (st.node_health[n.code] === "BELOW") badge = "BELOW";
+    else badge = "OK";
+    $("badge-" + n.code).textContent = badge + " · $" + fmt(value);
+  }
+  $("totals").innerHTML = "<b>" + fmt(totalUnits) + "</b> units · <b>$" + fmt(totalValue) + "</b> stock value";
+  renderDemand(st);
+  renderOrders(st);
+  renderPolicyFeed(st);
+  renderMarkers(st);
+}
+
+function renderMarkers(st) {
+  const layer = $("markers");
+  layer.innerHTML = "";
+  const fallback = { x: 460, y: 300 };
+  for (const s of st.shipments) {
+    if (s.arrived) continue;
+    let a = layout.nodes[s.origin];
+    const fromSupplier = !a && s.origin && s.origin.indexOf("SUP:") === 0;
+    if (!a) a = fromSupplier ? (layout.supplier_exit || layout.supplier) : fallback;
+    const b = layout.nodes[s.destination] || fallback;
+    const span = Math.max(1, s.eta_day - s.created_day);
+    const t = Math.min(1, Math.max(0, (st.meta.day - s.created_day) / span));
+    let x, y;
+    if (fromSupplier && s.destination) {
+      const path = document.querySelector(
+        'path.to-hub[data-hub="' + s.destination + '"]');
+      if (path) {
+        const qx = parseFloat(path.dataset.qx);
+        const qy = parseFloat(path.dataset.qy);
+        const u = 1 - t;
+        x = u * u * a.x + 2 * u * t * qx + t * t * b.x;
+        y = u * u * a.y + 2 * u * t * qy + t * t * b.y;
+      } else {
+        x = a.x + (b.x - a.x) * t;
+        y = a.y + (b.y - a.y) * t;
+      }
+    } else {
+      x = a.x + (b.x - a.x) * t;
+      y = a.y + (b.y - a.y) * t;
+    }
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x); c.setAttribute("cy", y);
+    c.setAttribute("r", s.expedited ? 9 : 7);
+    c.setAttribute("class", s.expedited ? "marker expedited" : "marker");
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = s.shipment_id + ": " + s.qty + " x " + s.item_code +
+      " " + s.origin + " -> " + s.destination + ", ETA day " + s.eta_day;
+    c.appendChild(title);
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("x", x); label.setAttribute("y", y - 11);
+    label.setAttribute("class", "marker-label");
+    label.textContent = (s.expedited ? "! " : "") + s.item_code + " x" + s.qty + " · ETA " + s.eta_day;
+    layer.appendChild(c);
+    layer.appendChild(label);
+  }
+}
+
+function stopPlay() {
+  if (timer) { clearInterval(timer); timer = null; }
+  $("play").disabled = false;
+  $("pause").disabled = true;
+}
+
+$("play").onclick = () => {
+  if (timer) return;
+  $("play").disabled = true;
+  $("pause").disabled = false;
+  timer = setInterval(async () => { await post("/tick"); await refresh(); },
+                      parseInt($("speed").value, 10));
+};
+$("pause").onclick = stopPlay;
+$("step").onclick = async () => { await post("/tick"); await refresh(); };
+$("run30").onclick = async () => { await post("/run?days=30"); await refresh(); };
+$("reset").onclick = async () => { stopPlay(); await post("/reset"); await refresh(); };
+$("apply-policy").onclick = async () => {
+  const on = lastSt && lastSt.meta.policy_engine;
+  const res = await post(on ? "/policy/disable" : "/policy/apply?policy=pooled");
+  if (res) {
+    alert(on
+      ? "Replenishment engine off — the run is back on the case's own reorder levels."
+      : "MEIO-pooled policy applied: " + res.changed_pairs +
+        " pairs changed. Engine on - press Play to watch replenishment.");
+    await refresh();
+  }
+};
+$("send").onclick = async () => {
+  const q = new URLSearchParams({
+    origin: $("origin").value,
+    destination: $("destination").value,
+    item_code: $("item").value,
+    qty: $("qty").value,
+    days: $("days").value,
+  });
+  const res = await post("/demo/shipment?" + q.toString());
+  if (res) await refresh();
+};
+
+$("slider").addEventListener("input", () => {
+  sliderTouched = true;
+  const v = parseFloat($("slider").value);
+  const st = lastSt;
+  $("demand-label").innerHTML =
+    "×<b>" + v.toFixed(2) + "</b> · ~" + fmt(monthlyAt(st, v)) + " units/month";
+});
+
+$("slider").addEventListener("change", async () => {
+  sliderTouched = true;
+  const v = parseFloat($("slider").value);
+  const res = await post("/demand/scale?value=" + v);
+  if (res) await refresh();
+});
+
+window.addEventListener("load", async () => {
+  try { layout = await (await fetch("/static/layout.json")).json(); }
+  catch (e) { layout = { nodes: {} }; }
+  await refresh();
+});
+</script>
+</body>
+</html>

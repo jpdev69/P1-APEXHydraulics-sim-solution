@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apex Hydraulics — demand dashboard</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #eef2f6; color: #17293d; }
+  header { padding: 10px 16px; background: #10314f; color: #fff; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { font-size: 13px; color: #c7d6e6; }
+  header .meta b { color: #fff; }
+  nav a { color: #c7d6e6; font-size: 13px; text-decoration: none; margin-right: 12px; padding-bottom: 2px; }
+  nav a.current { color: #fff; border-bottom: 2px solid #64b5f6; }
+  #controls { padding: 8px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; background: #dde6ef; }
+  button { padding: 5px 12px; border-radius: 6px; border: 1px solid #8fa5ba; background: #fff; cursor: pointer; font-size: 13px; }
+  button:hover:not(:disabled) { background: #eaf2fb; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: #1565c0; border-color: #0d47a1; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #1976d2; }
+  select { padding: 3px 6px; border-radius: 6px; border: 1px solid #8fa5ba; font-size: 13px; }
+  #readouts { display: flex; gap: 26px; padding: 10px 16px; font-size: 13px; background: #d8e5f1; border-bottom: 1px solid #b9c6d3; flex-wrap: wrap; }
+  #readouts .big { font-size: 15px; }
+  .ok { color: #2e7d32; } .warn { color: #ef6c00; } .bad { color: #c62828; }
+  main { padding: 12px 16px; max-width: 1000px; }
+  section.card { background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 10px 14px 14px; margin-bottom: 14px; }
+  section.card h2 { font-size: 14px; margin: 4px 0 6px; }
+  svg.chart { width: 100%; height: auto; }
+  .axis { stroke: #90a4ae; stroke-width: 1; }
+  .grid { stroke: #e4ebf2; stroke-width: 1; }
+  .axis-label { font-size: 10px; fill: #78909c; }
+  .chart-title { font-size: 12px; fill: #17293d; font-weight: 700; }
+  .empty { font-size: 12px; fill: #90a4ae; }
+  .ln-forecast { fill: none; stroke: #1565c0; stroke-width: 2; stroke-dasharray: 6 4; }
+  .ln-actual { fill: none; stroke: #2e7d32; stroke-width: 2; }
+  .target-line { stroke: #c62828; stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .bar-ok { fill: #4caf50; } .bar-warn { fill: #ffb74d; } .bar-bad { fill: #ef5350; }
+  .legend { font-size: 10.5px; fill: #455a64; }
+  #weekly-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  #weekly-table th, #weekly-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e4ebf2; }
+  #weekly-table th { color: #546e7a; font-weight: 600; }
+  #weekly-table thead th { position: sticky; top: 0; z-index: 2; background: #f4f7fa; box-shadow: 0 1px 0 #c3ceda; }
+  footer { padding: 6px 16px 18px; font-size: 11.5px; color: #5c7288; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Apex Hydraulics — demand dashboard</h1>
+  <nav>
+    <a href="/">canvas</a>
+    <a href="/dashboard" class="current">dashboard</a>
+    <a href="/optimize">optimize</a>
+    <a href="/scorecard">scorecard</a>
+  </nav>
+  {% if case %}
+  <span class="meta">case: <b>{{ case }}</b></span>
+  <span class="meta" id="day">day <b>{{ day }}</b></span>
+  {% else %}
+  <span class="meta">no case loaded — run <code>sim load &lt;case-folder&gt;</code> first</span>
+  {% endif %}
+</header>
+
+{% if case %}
+<section id="controls">
+  <button id="play" class="primary">Play</button>
+  <button id="pause" disabled>Pause</button>
+  <button id="step">Step +1 day</button>
+  <button id="run30">Run 30 days</button>
+  <button id="reset">Reset</button>
+  <label>speed
+    <select id="speed">
+      <option value="1500">1.5 s/day</option>
+      <option value="700" selected>0.7 s/day</option>
+      <option value="300">0.3 s/day</option>
+    </select>
+  </label>
+</section>
+
+<section id="readouts">
+  <div class="big">demand scale <b id="scale-ro">—</b></div>
+  <div class="big" id="cum-ro" title="forecast error (MAPE): how far off, as % of demand">
+    forecast vs actual: <b>—</b>
+  </div>
+  <div class="big">tier-1 target <b id="target-ro">—</b></div>
+  <div>pair <select id="item-sel"></select> @ <select id="hub-sel"></select></div>
+</section>
+
+<main>
+  <section class="card">
+    <h2>Forecast vs actual (units per day)</h2>
+    <svg id="chart-forecast" class="chart" viewBox="0 0 900 230" xmlns="http://www.w3.org/2000/svg"></svg>
+  </section>
+  <section class="card">
+    <h2>Tier-1 fill rate by week</h2>
+    <svg id="chart-fill" class="chart" viewBox="0 0 900 230" xmlns="http://www.w3.org/2000/svg"></svg>
+  </section>
+  <section class="card">
+    <h2>Orders per day by status</h2>
+    <svg id="chart-strip" class="chart" viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg"></svg>
+  </section>
+  <section class="card">
+    <h2>Weekly rollup</h2>
+    <table id="weekly-table">
+      <thead>
+        <tr><th>week</th><th>forecast units</th><th>actual units</th><th>error %</th>
+            <th>orders</th><th>tier-1 fill rate</th></tr>
+      </thead>
+      <tbody id="weekly-body"></tbody>
+    </table>
+  </section>
+</main>
+{% endif %}
+
+<footer>
+  All numbers derive from the run state via <code>/metrics</code> — nothing is
+  recomputed in the browser. Forecast = planning averages × seasonality ×
+  demand scale. Fill rate = orders created that week that were filled;
+  tier-1 = customers flagged Tier 1. MAPE = how far off, as % of demand.
+</footer>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+let timer = null;
+let selectorsReady = false;
+
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function fmt(n) { return n.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+
+async function post(url) {
+  const r = await fetch(url, { method: "POST" });
+  if (!r.ok) return null;
+  return r.json();
+}
+
+function selParams() {
+  const i = $("item-sel").value, h = $("hub-sel").value;
+  return i && h ? "?item=" + encodeURIComponent(i) + "&hub=" + encodeURIComponent(h) : "";
+}
+
+async function refreshAll() {
+  const r = await fetch("/metrics" + selParams());
+  if (!r.ok) return;
+  const m = await r.json();
+  renderMetrics(m);
+  if (!selectorsReady) {
+    populateSelectors(m);
+    selectorsReady = true;
+    await refreshAll();
+  }
+}
+
+function populateSelectors(m) {
+  const is = $("item-sel"), hs = $("hub-sel");
+  const preferred = m.items.find((c) => c.indexOf("HP-") === 0) || m.items[0];
+  for (const i of m.items) {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = i; o.selected = (i === preferred);
+    is.appendChild(o);
+  }
+  for (const h of m.hubs) {
+    const o = document.createElement("option");
+    o.value = h; o.textContent = h; o.selected = (h === m.hubs[0]);
+    hs.appendChild(o);
+  }
+  is.onchange = refreshAll;
+  hs.onchange = refreshAll;
+}
+
+function rateClass(v) {
+  return v >= 97 ? "ok" : (v >= 90 ? "warn" : "bad");
+}
+
+function renderMetrics(m) {
+  $("day").innerHTML = "day <b>" + m.day + "</b>";
+  $("scale-ro").textContent = "×" + m.scale.toFixed(2);
+  $("target-ro").textContent = m.tier1_target_pct + "%";
+  const cum = m.cumulative;
+  $("cum-ro").innerHTML =
+    "forecast <b>" + fmt(cum.forecast) + "</b> · actual <b>" + fmt(cum.actual) +
+    "</b> · error <b>" + (cum.mape_pct != null ? cum.mape_pct + "%" : "—") + "</b>";
+  renderForecast(m);
+  renderFill(m);
+  renderStrip(m);
+  renderWeekly(m);
+}
+
+function renderForecast(m) {
+  const svg = $("chart-forecast");
+  svg.innerHTML = "";
+  const W = 900, H = 230, P = 44;
+  const d = m.selected || { item: "all items", hub: "all hubs",
+                           forecast: m.forecast_units, actual: m.actual_units };
+  const n = d.forecast.length;
+  svg.appendChild(el("text", { x: P, y: 18, class: "chart-title" },
+                     d.item + " @ " + d.hub + " — units/day"));
+  if (!n) {
+    svg.appendChild(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "empty" },
+                       "run the simulation to see forecast vs actual"));
+    return;
+  }
+  const maxY = Math.max(1, ...d.forecast, ...d.actual) * 1.15;
+  const x = (i) => P + (n === 1 ? (W - 2 * P) / 2 : i * (W - 2 * P) / (n - 1));
+  const y = (v) => H - P - (v / maxY) * (H - 2 * P);
+  svg.appendChild(el("line", { x1: P, y1: H - P, x2: W - P, y2: H - P, class: "axis" }));
+  svg.appendChild(el("line", { x1: P, y1: P - 6, x2: P, y2: H - P, class: "axis" }));
+  svg.appendChild(el("text", { x: 6, y: P, class: "axis-label" }, Math.round(maxY)));
+  svg.appendChild(el("text", { x: 6, y: H - P, class: "axis-label" }, "0"));
+  svg.appendChild(el("text", { x: W - P, y: H - P + 14, "text-anchor": "end", class: "axis-label" }, "day " + n));
+  svg.appendChild(el("polyline", {
+    points: d.forecast.map((v, i) => x(i) + "," + y(v).toFixed(1)).join(" "),
+    class: "ln-forecast",
+  }));
+  svg.appendChild(el("polyline", {
+    points: d.actual.map((v, i) => x(i) + "," + y(v).toFixed(1)).join(" "),
+    class: "ln-actual",
+  }));
+  svg.appendChild(el("line", { x1: W - 250, y1: 30, x2: W - 226, y2: 30, class: "ln-forecast" }));
+  svg.appendChild(el("text", { x: W - 220, y: 33, class: "legend" }, "forecast"));
+  svg.appendChild(el("line", { x1: W - 250, y1: 46, x2: W - 226, y2: 46, class: "ln-actual" }));
+  svg.appendChild(el("text", { x: W - 220, y: 49, class: "legend" }, "actual"));
+}
+
+function renderFill(m) {
+  const svg = $("chart-fill");
+  svg.innerHTML = "";
+  const W = 900, H = 230, P = 44;
+  const target = m.tier1_target_pct;
+  svg.appendChild(el("text", { x: P, y: 18, class: "chart-title" },
+                     "weekly tier-1 fill rate — target " + target + "%"));
+  const weeks = m.weekly;
+  if (!weeks.length) {
+    svg.appendChild(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "empty" },
+                       "run the simulation to see the fill-rate trend"));
+    return;
+  }
+  const y = (v) => H - P - (v / 100) * (H - 2 * P);
+  svg.appendChild(el("line", { x1: P, y1: H - P, x2: W - P, y2: H - P, class: "axis" }));
+  svg.appendChild(el("line", { x1: P, y1: P - 6, x2: P, y2: H - P, class: "axis" }));
+  for (const v of [0, 50, 100]) {
+    svg.appendChild(el("line", { x1: P, y1: y(v), x2: W - P, y2: y(v), class: "grid" }));
+    svg.appendChild(el("text", { x: 6, y: y(v) + 4, class: "axis-label" }, v));
+  }
+  svg.appendChild(el("line", { x1: P, y1: y(target), x2: W - P, y2: y(target), class: "target-line" }));
+  svg.appendChild(el("text", { x: W - P - 4, y: y(target) - 5, "text-anchor": "end",
+                               class: "axis-label", fill: "#c62828" }, "target " + target + "%"));
+  const slot = (W - 2 * P) / weeks.length;
+  const bw = Math.min(70, slot * 0.5);
+  weeks.forEach((w, i) => {
+    const value = w.tier1_fill_rate_pct != null ? w.tier1_fill_rate_pct : w.fill_rate_pct;
+    if (value == null) return;
+    const cx = P + slot * i + slot / 2;
+    const color = value >= target ? "bar-ok" : (value >= target - 10 ? "bar-warn" : "bar-bad");
+    svg.appendChild(el("rect", { x: cx - bw / 2, y: y(value), width: bw,
+                                 height: Math.max(0.5, H - P - y(value)), class: color }));
+    svg.appendChild(el("text", { x: cx, y: y(value) - 5, "text-anchor": "middle", class: "axis-label" },
+                       value.toFixed(0) + "%"));
+    svg.appendChild(el("text", { x: cx, y: H - P + 14, "text-anchor": "middle", class: "axis-label" },
+                       "W" + w.week));
+  });
+}
+
+function renderStrip(m) {
+  const svg = $("chart-strip");
+  svg.innerHTML = "";
+  const W = 900, H = 200, P = 44;
+  svg.appendChild(el("text", { x: P, y: 18, class: "chart-title" },
+                     "orders created per day — filled / pending / late"));
+  const n = m.days.length;
+  if (!n) {
+    svg.appendChild(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "empty" },
+                       "run the simulation to see the order strip"));
+    return;
+  }
+  const totals = m.days.map((_, i) => m.filled[i] + m.pending[i] + m.late[i]);
+  const maxY = Math.max(1, ...totals) * 1.1;
+  const y = (v) => H - P - (v / maxY) * (H - 2 * P);
+  const bw = Math.max(2, (W - 2 * P) / n - 2);
+  svg.appendChild(el("line", { x1: P, y1: H - P, x2: W - P, y2: H - P, class: "axis" }));
+  svg.appendChild(el("line", { x1: P, y1: P - 6, x2: P, y2: H - P, class: "axis" }));
+  svg.appendChild(el("text", { x: 6, y: P, class: "axis-label" }, Math.round(maxY)));
+  svg.appendChild(el("text", { x: 6, y: H - P, class: "axis-label" }, "0"));
+  m.days.forEach((day, i) => {
+    const x = P + i * (W - 2 * P) / n;
+    let base = 0;
+    for (const [count, cls] of [[m.filled[i], "bar-ok"], [m.pending[i], "bar-warn"], [m.late[i], "bar-bad"]]) {
+      if (!count) continue;
+      svg.appendChild(el("rect", { x: x, y: y(base + count), width: bw,
+                                  height: Math.max(0.5, y(base) - y(base + count)), class: cls }));
+      base += count;
+    }
+  });
+  const legend = [["bar-ok", "filled"], ["bar-warn", "pending"], ["bar-bad", "late"]];
+  legend.forEach(([cls, label], i) => {
+    svg.appendChild(el("rect", { x: W - 260 + i * 90, y: 28, width: 10, height: 10, class: cls }));
+    svg.appendChild(el("text", { x: W - 246 + i * 90, y: 37, class: "legend" }, label));
+  });
+}
+
+function renderWeekly(m) {
+  const body = $("weekly-body");
+  body.innerHTML = "";
+  for (const w of m.weekly) {
+    const tr = document.createElement("tr");
+    const fill = w.tier1_fill_rate_pct != null ? w.tier1_fill_rate_pct : w.fill_rate_pct;
+    tr.innerHTML =
+      "<td>W" + w.week + " (days " + w.from_day + "–" + w.to_day + ")</td>" +
+      "<td>" + w.forecast + "</td>" +
+      "<td>" + w.actual + "</td>" +
+      "<td title='how far off, as % of demand'>" + (w.error_pct != null ? w.error_pct + "%" : "—") + "</td>" +
+      "<td>" + w.orders + "</td>" +
+      "<td class='" + (fill != null ? rateClass(fill) : "") + "'>" +
+        (fill != null ? fill + "%" : "—") + "</td>";
+    body.appendChild(tr);
+  }
+}
+
+function stopPlay() {
+  if (timer) { clearInterval(timer); timer = null; }
+  $("play").disabled = false;
+  $("pause").disabled = true;
+}
+
+$("play").onclick = () => {
+  if (timer) return;
+  $("play").disabled = true;
+  $("pause").disabled = false;
+  timer = setInterval(async () => { await post("/tick"); await refreshAll(); },
+                      parseInt($("speed").value, 10));
+};
+$("pause").onclick = stopPlay;
+$("step").onclick = async () => { await post("/tick"); await refreshAll(); };
+$("run30").onclick = async () => { await post("/run?days=30"); await refreshAll(); };
+$("reset").onclick = async () => { stopPlay(); await post("/reset"); await refreshAll(); };
+
+window.addEventListener("load", refreshAll);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "nodes": {
+    "WH-CENTRAL": {"x": 460, "y": 300},
+    "WH-NORTH": {"x": 560, "y": 110},
+    "WH-CENTRAL-HUB": {"x": 760, "y": 420},
+    "WH-SOUTH": {"x": 460, "y": 500}
+  },
+  "supplier": {"x": 95, "y": 83},
+  "supplier_exit": {"x": 170, "y": 83}
+}

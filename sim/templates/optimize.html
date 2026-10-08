@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apex Hydraulics — stock planner</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #eef2f6; color: #17293d; }
+  header { padding: 10px 16px; background: #10314f; color: #fff; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { font-size: 13px; color: #c7d6e6; }
+  header .meta b { color: #fff; }
+  nav a { color: #c7d6e6; font-size: 13px; text-decoration: none; margin-right: 12px; padding-bottom: 2px; }
+  nav a.current { color: #fff; border-bottom: 2px solid #64b5f6; }
+  main { padding: 12px 16px; max-width: 1060px; }
+  .banner { background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; font-size: 14px; }
+  .banner.good { border-color: #4caf50; background: #f0f7f0; }
+  .banner.caution { border-color: #ef6c00; background: #fdf3e7; }
+  .banner b.big { font-size: 18px; }
+  .ok { color: #2e7d32; } .warn { color: #ef6c00; } .bad { color: #c62828; }
+  section.card { background: #fff; border: 1px solid #c3ceda; border-radius: 10px; padding: 10px 14px 14px; margin-bottom: 14px; }
+  section.card h2 { font-size: 14px; margin: 4px 0 2px; }
+  section.card p.sub { font-size: 12px; color: #546e7a; margin: 0 0 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 10px; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #e4ebf2; }
+  th:first-child, td:first-child, th.n, td.n { text-align: left; }
+  th { color: #546e7a; font-weight: 600; }
+  thead th { position: sticky; top: 0; z-index: 2; background: #f4f7fa; box-shadow: 0 1px 0 #c3ceda; }
+  .banner a { color: #1565c0; }
+  tr.node-head td { background: #dde6ef; font-weight: 700; font-size: 12.5px; }
+  .flag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 8px; }
+  .flag.fit { background: #fff3cd; color: #7a5b00; }
+  .flag.over { background: #fdecea; color: #b71c1c; }
+  .explainer { font-size: 12.5px; color: #33465a; line-height: 1.55; }
+  .explainer code { background: #eef2f6; padding: 1px 4px; border-radius: 4px; }
+  details summary { cursor: pointer; font-size: 14px; font-weight: 700; color: #17293d; }
+  details[open] summary { margin-bottom: 6px; }
+  select.hub-select { padding: 4px 6px; border: 1px solid #b9c6d3; border-radius: 5px; font-size: 12.5px; margin-bottom: 8px; background: #fff; color: #17293d; }
+  footer { padding: 6px 16px 18px; font-size: 11.5px; color: #5c7288; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Apex Hydraulics — stock planner</h1>
+  <nav>
+    <a href="/">canvas</a>
+    <a href="/dashboard">dashboard</a>
+    <a href="/optimize" class="current">plan</a>
+    <a href="/scorecard">scorecard</a>
+  </nav>
+  {% if case %}
+  <span class="meta">case: <b>{{ case }}</b></span>
+  {% else %}
+  <span class="meta">no case loaded — run <code>sim load &lt;case-folder&gt;</code> first</span>
+  {% endif %}
+</header>
+
+{% if result %}
+<main>
+  {% set s = result.savings %}
+  <div class="banner {{ 'good' if s.reduction_pct > 0 else 'caution' }}">
+    <b>Risk pooling vs today's dispersed safety stock</b> at the same
+    {{ result.service_level_pct }}% service level — planning values are
+    fixed from the case data, hence, simulation runs do not change them:
+    dispersed (each hub alone) = <b>{{ s.dispersed_total_safety_stock }} units</b>,
+    pooled (one shared buffer at the plant) = <b>{{ s.pooled_total_safety_stock }} units</b> —
+    {% if s.reduction_pct > 0 %}
+      <b class="big ok">{{ s.reduction_pct }}% less safety stock</b>
+      for the same protection.
+    {% else %}
+      <b class="warn">{{ s.reduction_pct }}%</b> — risk pooling pays off when
+      demand spreads across several hubs; this case's demand doesn't.
+    {% endif %}
+  </div>
+
+  {% macro policy_table(policy, label, note) %}
+  <section class="card">
+    <h2>{{ label }}</h2>
+    <p class="sub">{{ note }}</p>
+    <select class="hub-select">
+      {% for hub in policy["nodes"] %}
+      <option value="{{ hub }}">{{ hub }}</option>
+      {% endfor %}
+      <option value="*">All hubs</option>
+    </select>
+    <table>
+      <thead>
+        <tr>
+          <th>warehouse / product</th><th>avg demand /mo</th>
+          <th>σ /mo</th>
+          <th>lead time (days)</th><th>σ over lead time</th>
+          <th>safety stock</th>
+          <th>reorder point</th>
+          <th>max stock</th>
+        </tr>
+      </thead>
+      {% for hub, block in policy["nodes"].items() %}
+      <tbody class="hub-block" data-hub="{{ hub }}">
+        <tr class="node-head">
+          <td colspan="8">
+            {{ hub }} — safety stock {{ block["total_safety_stock"] }},
+            max stock {{ block["total_max_stock"] }} of
+            {{ block["capacity_units"] }} storage
+            {% if block["over_capacity"] %}<span class="flag over">OVER STORAGE</span>
+            {% elif block["capacity_fit"] %}<span class="flag fit">shrunk to fit</span>{% endif %}
+          </td>
+        </tr>
+        {% for item, row in block["items"].items() %}
+        <tr>
+          <td>{{ item }}</td>
+          <td>{{ row.avg_monthly_demand }}</td>
+          <td>{{ row.sigma_month }}</td>
+          <td>{{ row.lead_time_days }}</td>
+          <td>{{ row.sigma_dlt }}</td>
+          <td><b>{{ row.safety_stock }}</b></td>
+          <td>{{ row.reorder_point }}</td>
+          <td>{{ row.max_stock }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% endfor %}
+    </table>
+  </section>
+  {% endmacro %}
+
+  {{ policy_table(result.dispersed,
+       "Plan A — every hub keeps its own safety stock (today's Apex)" + (" — currently applied" if applied_policy == 'dispersed' else ""),
+       "Each regional hub holds its own safety stock, sized on its own demand and its own lead time (the case's planning lead times). The central plant holds nothing — exactly how Apex runs today.") }}
+  {{ policy_table(result.pooled,
+       "Plan B — one shared safety stock at the central plant (the redesign)" + (" — currently applied" if applied_policy == 'pooled' else ""),
+       "The central plant keeps ONE shared safety stock per product, sized on all hubs' demand combined and the fastest supplier lead time. The regional hubs keep only small buffers sized on the short plant-to-hub lane.") }}
+
+  <section class="card">
+    <details open>
+      <summary>How the numbers are built</summary>
+      <div class="explainer">
+      <p><b>How variable is demand for a product?</b> Two independent noise
+      sources combine like the two short sides of a triangle:
+      <code>k = √(day-to-day noise² + seasonal swing²)</code>, and
+      <code>σ /mo = avg monthly demand × k</code> — σ ("sigma") is the
+      standard measure of demand variability.</p>
+      <p><b>Safety stock</b> covers demand while replenishment is on its
+      way: <code>safety stock = z × σ over lead time</code>, where
+      <code>σ over lead time = σ /mo × √(lead-time days / 30)</code>.
+      z = {{ result.z }} is the service-level factor the
+      {{ result.service_level_pct }}% goal costs (from the standard bell
+      curve — Python's <code>NormalDist().inv_cdf</code>).</p>
+      <p><b>Reorder point</b>:
+      <code>expected lead-time demand + safety stock</code> — when stock
+      drops below it, replenishment goes out. <b>Max stock</b>:
+      <code>reorder point + one month of demand</code>, shrunk to fit the
+      warehouse when needed (never below the reorder point) — such rows
+      carry a "shrunk to fit" tag.</p>
+      <p><b>Why one shared safety stock wins</b>: the hubs' busy days don't
+      sync — one hub's spike often lands on another hub's quiet day:
+      <code>σ_pooled = k × √(Σ hub demands²)</code>, which is smaller than
+      adding up each hub's own sigma. One shared buffer needs less total
+      stock for the same {{ result.service_level_pct }}% protection, and
+      the plant also replenishes on the fast supplier lead time instead
+      of each hub waiting on its own long one.</p>
+      </div>
+    </details>
+  </section>
+
+</main>
+{% endif %}
+
+<footer>
+  Every number derives from the loaded case (planning averages, item
+  demand variability, seasonal swing, supplier and lane lead times, the
+  97% goal and warehouse caps). <code>GET /meio</code> returns the same
+  result as JSON.
+</footer>
+<script>
+for (const select of document.querySelectorAll("select.hub-select")) {
+  const apply = () => {
+    const chosen = select.value;
+    for (const block of select.closest("section.card")
+                             .querySelectorAll("tbody.hub-block")) {
+      block.style.display =
+        chosen === "*" || block.dataset.hub === chosen ? "" : "none";
+    }
+  };
+  select.addEventListener("change", apply);
+  apply();
+}
+</script>
+</body>
+</html>
